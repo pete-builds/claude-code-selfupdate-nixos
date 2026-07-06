@@ -19,3 +19,24 @@ jobs:
 
       - name: Build pinned package
         run: nix build .#claude-code
+
+      - name: Build self-updating wrapper
+        run: nix build .#claude-code-selfupdate
+
+      - name: Verify Anthropic's live manifest signature with the pinned key
+        # Exercises the exact trust anchor the updater relies on: import ONLY the
+        # in-repo key into a throwaway keyring and require a good signature whose
+        # primary-key fingerprint equals the pinned one. Fails the build if
+        # Anthropic's current release manifest does not verify against our key.
+        run: |
+          set -euo pipefail
+          fpr="31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
+          repo="https://downloads.claude.ai/claude-code-releases"
+          ver="$(curl -fsS "$repo/latest" | tr -d '[:space:]')"
+          curl -fsSLO "$repo/$ver/manifest.json"
+          curl -fsSLO "$repo/$ver/manifest.json.sig"
+          gh="$(mktemp -d)"; chmod 700 "$gh"
+          GNUPGHOME="$gh" gpg --batch --quiet --import data/claude-code-signing-key.asc
+          GNUPGHOME="$gh" gpg --batch --status-fd 1 --verify manifest.json.sig manifest.json \
+            | grep -q "^\[GNUPG:\] VALIDSIG .* ${fpr}\$"
+          echo "manifest signature verified for $ver against pinned key"

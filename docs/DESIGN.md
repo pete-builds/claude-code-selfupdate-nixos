@@ -65,11 +65,19 @@ On Darwin no loader indirection is needed, so the raw binary runs directly.
 Every risky step degrades to the pinned build:
 
 - No network, or the release check times out: run the pinned build.
-- `curl`/`jq` missing, or a malformed version string: run the pinned build.
-- Download fails, or checksum does not match Anthropic's manifest: discard the
+- `curl`/`jq`/`gpg` missing, or a malformed version string: run the pinned build.
+- The manifest's GPG signature is missing or does not verify against the pinned
+  Anthropic key: refuse the update, run the pinned build.
+- Download fails, or checksum does not match the signed manifest: discard the
   download, run the pinned build.
 - Download verifies but fails its `--version` smoke test: discard it, run the
   pinned build.
+
+The order matters: the signature over the manifest is checked **before** the
+manifest's checksums are trusted, so the sha256 the download is compared against
+is itself signature-anchored rather than merely fetched over TLS. Verification is
+fail-closed: if it cannot be performed (no `gpg`, no pinned key, no signature),
+nothing is staged and the pinned build stands.
 
 The launcher only ever **stages** a newer binary for the next launch after it
 has verified and smoke-tested it. The pinned store binary, whose integrity is
@@ -85,9 +93,10 @@ There are two packages on purpose:
   same `data/sources.json`, same store path. It is the fallback the launcher
   falls back to, and it is what you get if you set `selfUpdate = false`. It is
   also the thing CI builds to prove the pin is valid.
-- `claude-code-selfupdate` is the wrapper. It adds the launcher and the runtime
-  tools it needs (`curl`, `jq`, `coreutils`, and `flock` on Linux) and injects
-  the loader and library path as environment variables. It contains no binary
+- `claude-code-selfupdate` is the wrapper. It adds the launcher, the runtime
+  tools it needs (`curl`, `jq`, `coreutils`, `gnupg`, and `flock` on Linux), and
+  the pinned Anthropic signing key, and injects the loader, library path, key
+  path, and expected fingerprint as environment variables. It contains no binary
   of its own; it references the pinned build.
 
 Keeping them separate means the deterministic build stands on its own (auditable,

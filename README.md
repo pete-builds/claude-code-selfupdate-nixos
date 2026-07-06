@@ -36,10 +36,14 @@ artifact. This project keeps the trust surface as small as it can be:
 - Every version is pinned and verified against **Anthropic's own** published
   sha256, taken verbatim from
   `https://downloads.claude.ai/claude-code-releases/<version>/manifest.json`.
+- That manifest is checked against **Anthropic's own GPG signature**
+  (`manifest.json.sig`) using a key pinned in this repo, so the checksums
+  themselves are cryptographically anchored, not just fetched over TLS.
 - No third-party flake is required, and no third-party binary cache is required.
-  You build locally and can re-verify the hash yourself.
+  You build locally and can re-verify the signature and hash yourself.
 
-The net trust surface is Anthropic plus a checksum you can independently check.
+The net trust surface is Anthropic's signing key plus a signature and checksum
+you can independently verify.
 
 ## Quick start
 
@@ -105,8 +109,9 @@ The self-updating launcher is designed to never get in your way:
 1. On launch it immediately execs the best binary it already has. This is
    instant and works offline. It never blocks you waiting on the network.
 2. In the background it checks Anthropic's `/latest` release. If a newer
-   version exists, it downloads that version and verifies it against
-   Anthropic's own published sha256 from the manifest.
+   version exists, it first verifies Anthropic's GPG signature over that
+   release's manifest (against a key pinned in this repo), then downloads the
+   binary and verifies it against the sha256 in that signed manifest.
 3. A verified download is smoke-tested (`--version`) before it is ever trusted,
    then staged for the **next** launch.
 4. The pinned Nix build is always the permanent fallback, so `claude` keeps
@@ -117,10 +122,21 @@ with `programs.claude-code.selfUpdate = false;`.
 
 ## Trust and verification
 
-Two properties are worth calling out:
+Three properties are worth calling out:
 
+- **Anthropic's GPG signature over the manifest.** Both paths verify Anthropic's
+  detached signature (`manifest.json.sig`) over the release `manifest.json`
+  before trusting anything it says. Verification uses a public key **pinned in
+  this repo** ([`data/claude-code-signing-key.asc`](data/claude-code-signing-key.asc)),
+  imported into a throwaway keyring, and it requires the signer's primary-key
+  fingerprint to equal `31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE` (Anthropic's
+  documented release-signing key). A signature from any other key is rejected.
+  The build-time updater refuses to write `data/sources.json` on a bad
+  signature; the self-updater refuses to stage a download. Since the checksums
+  live in the signed manifest, a good signature transitively anchors every
+  binary hash.
 - **Anthropic's own checksum.** Nothing is ever run without matching the
-  sha256 that Anthropic publishes in its release `manifest.json`. The pinned
+  sha256 that Anthropic publishes in that signed `manifest.json`. The pinned
   build enforces this at Nix eval/build time; the self-updater enforces it
   again at download time. A mismatch means the download is discarded.
 - **Byte-identical run.** A self-updated download is run **unmodified**, that
@@ -130,23 +146,37 @@ Two properties are worth calling out:
   before they run. (The pinned build does use `autoPatchelfHook`, because its
   integrity is established at Nix build time rather than at run time.)
 
-You can re-verify any pinned version yourself:
+You can re-verify any pinned version yourself, end to end, with Anthropic's own
+key:
 
 ```sh
-curl -fsS https://downloads.claude.ai/claude-code-releases/<version>/manifest.json | jq .platforms
+# 1. Import Anthropic's release signing key and confirm the fingerprint.
+curl -fsSL https://downloads.claude.ai/keys/claude-code.asc | gpg --import
+gpg --fingerprint security@anthropic.com
+#   -> 31DD DE24 DDFA B679 F42D  7BD2 BAA9 29FF 1A7E CACE
+
+# 2. Verify the manifest signature for a version.
+REPO=https://downloads.claude.ai/claude-code-releases; VERSION=<version>
+curl -fsSLO "$REPO/$VERSION/manifest.json"
+curl -fsSLO "$REPO/$VERSION/manifest.json.sig"
+gpg --verify manifest.json.sig manifest.json
+#   -> Good signature from "Anthropic Claude Code Release Signing ..."
+
+# 3. Compare the manifest's checksums against this repo's pin.
+jq .platforms manifest.json   # matches data/sources.json
 ```
 
-and compare against `data/sources.json`.
+The key committed at
+[`data/claude-code-signing-key.asc`](data/claude-code-signing-key.asc) is the
+same key at that URL; the fingerprint above is asserted in code so a swapped key
+cannot pass silently.
 
-**What this does not yet do.** Verification here is checksum integrity against
-the sha256 in Anthropic's `manifest.json`. It does **not** currently verify a
-cryptographic signature on the manifest itself. In other words, the trust anchor
-is your TLS connection to Anthropic's release host plus the published checksum,
-not a signature you can validate offline. That is meaningfully useful (a
-tampered or truncated download is rejected), but it is weaker than manifest
-signature verification. Adding manifest signature verification is the intended
-next step, and this section will make the stronger claim once it lands. Until
-then, do not read the checksum step as full supply-chain attestation.
+Anthropic publishes detached manifest signatures for releases `2.1.89` and
+newer. The pinned version here is well above that floor, so both the CI bump and
+the runtime self-updater require a valid signature and fail closed without one.
+(Individual Linux binaries are not separately code-signed by Anthropic; the
+signed manifest is the integrity anchor for them. macOS and Windows binaries
+also carry native code signatures.)
 
 ## Prior art and credits
 
@@ -163,8 +193,9 @@ What is different here, without any knock on those projects:
    `nix flake update` to move to a newer Claude Code. The launcher stages the
    newest verified release for the next `claude` run.
 2. **No required third-party binary cache.** The official binary is verified
-   against Anthropic's own checksum and built locally, so you do not have to
-   trust a third-party cache to get a fast install.
+   against Anthropic's own checksum, anchored by Anthropic's GPG signature over
+   the manifest, and built locally, so you do not have to trust a third-party
+   cache to get a fast install.
 
 ### How it compares
 

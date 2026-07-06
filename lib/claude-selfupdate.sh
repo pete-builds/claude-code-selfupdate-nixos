@@ -3,12 +3,14 @@
 #
 # On every launch it execs the best binary it already has (instant, works
 # offline), and in the BACKGROUND checks Anthropic's release channel. If a
-# newer version exists it downloads it, verifies it against Anthropic's OWN
-# published sha256, and stages it so the NEXT launch is current. A downloaded
-# binary is run UNMODIFIED (byte-identical to what we verified) via Nix's
-# dynamic loader, so nothing is ever run without a checksum match, and the
-# verified bytes are never rewritten. The Nix-pinned build is the permanent
-# fallback, so `claude` always works even if every network step fails.
+# newer version exists it verifies Anthropic's GPG signature over the release
+# manifest, then downloads the binary and verifies it against the sha256 in
+# that signed manifest, and stages it so the NEXT launch is current. A
+# downloaded binary is run UNMODIFIED (byte-identical to what we verified) via
+# Nix's dynamic loader, so nothing is ever run without a signature-anchored
+# checksum match, and the verified bytes are never rewritten. The Nix-pinned
+# build is the permanent fallback, so `claude` always works even if every
+# network or verification step fails (fail-closed: no verify, no stage).
 #
 # Environment (set by the Nix wrapper; do not hand-edit):
 #   CLAUDE_PINNED_BIN       reproducible Nix-built binary (fallback, runs directly)
@@ -17,6 +19,8 @@
 #   CLAUDE_OS               linux | darwin
 #   CLAUDE_DYNAMIC_LINKER   (linux) ELF interpreter used to run raw downloads
 #   CLAUDE_LIBRARY_PATH     (linux) --library-path for raw downloads
+#   CLAUDE_SIGNING_KEY      pinned Anthropic release public key (ASCII-armored)
+#   CLAUDE_SIGNING_FPR      expected primary-key fingerprint of that key
 #   CLAUDE_SELFUPDATE       0 disables the update check (just runs pinned)
 set -uo pipefail
 
@@ -28,6 +32,29 @@ log() { [ -n "${CLAUDE_SELFUPDATE_DEBUG:-}" ] && printf 'claude-selfupdate: %s\n
 
 # ver_gt A B -> true if A is strictly newer than B (semantic sort).
 ver_gt() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" = "$1" ]; }
+
+# Verify a detached GPG signature over a file using ONLY the pinned Anthropic
+# key, in a throwaway keyring, and require the signer's primary-key fingerprint
+# to equal CLAUDE_SIGNING_FPR. Returns 0 only on a cryptographically good
+# signature from exactly that key. Fail-closed: any missing tool, missing key,
+# or unexpected output is a non-zero return.
+verify_sig() { # verify_sig <signed-file> <detached-sig>
+  command -v gpg >/dev/null 2>&1 || { log "gpg unavailable, cannot verify"; return 1; }
+  [ -n "${CLAUDE_SIGNING_KEY:-}" ] && [ -r "$CLAUDE_SIGNING_KEY" ] || { log "no pinned key"; return 1; }
+  [ -n "${CLAUDE_SIGNING_FPR:-}" ] || { log "no pinned fingerprint"; return 1; }
+  local gh sfd
+  gh="$(mktemp -d "${TMPDIR:-/tmp}/ccsu-gpg.XXXXXX")" || return 1
+  chmod 700 "$gh"
+  if ! GNUPGHOME="$gh" gpg --batch --quiet --import "$CLAUDE_SIGNING_KEY" 2>/dev/null; then
+    rm -rf "$gh"; log "key import failed"; return 1
+  fi
+  sfd="$(GNUPGHOME="$gh" gpg --batch --status-fd 1 --verify "$2" "$1" 2>/dev/null)"
+  rm -rf "$gh"
+  # A VALIDSIG line whose trailing token is the pinned primary-key fingerprint.
+  printf '%s\n' "$sfd" | grep -q "^\[GNUPG:\] VALIDSIG .* ${CLAUDE_SIGNING_FPR}\$" \
+    || { log "signature not valid for pinned key"; return 1; }
+  return 0
+}
 
 # Raw downloads (not Nix-patched) run through the loader on Linux; native elsewhere.
 run_raw() {
@@ -67,15 +94,30 @@ selfupdate() {
   exec 9>"$CACHE/.lock" 2>/dev/null || return 0
   if command -v flock >/dev/null 2>&1; then flock -n 9 || return 0; fi
 
+  # Fetch the manifest AND its detached signature, then verify the signature
+  # with the pinned Anthropic key before trusting anything the manifest says.
+  local mdir man sig
+  mdir="$CACHE/versions/$latest"
+  man="$mdir/manifest.json"
+  sig="$mdir/manifest.json.sig"
+  curl -fsS --max-time 10 -o "$man" "$RELEASES/$latest/manifest.json" 2>/dev/null \
+    || { log "manifest fetch failed"; return 0; }
+  curl -fsS --max-time 10 -o "$sig" "$RELEASES/$latest/manifest.json.sig" 2>/dev/null \
+    || { log "signature fetch failed"; rm -f "$man" "$sig"; return 0; }
+  if ! verify_sig "$man" "$sig"; then
+    log "manifest signature verification failed, refusing update"
+    rm -f "$man" "$sig"; return 0
+  fi
+
+  # The checksum now comes from a SIGNATURE-VERIFIED manifest, not a raw fetch.
   local sum
-  sum="$(curl -fsS --max-time 10 "$RELEASES/$latest/manifest.json" 2>/dev/null \
-    | jq -r --arg p "$CLAUDE_PLATFORM" '.platforms[$p].checksum // empty' 2>/dev/null)" || return 0
-  [ -n "$sum" ] || { log "no checksum for $CLAUDE_PLATFORM"; return 0; }
+  sum="$(jq -r --arg p "$CLAUDE_PLATFORM" '.platforms[$p].checksum // empty' "$man" 2>/dev/null)" || return 0
+  [ -n "$sum" ] || { log "no checksum for $CLAUDE_PLATFORM"; rm -f "$man" "$sig"; return 0; }
 
   curl -fsS --max-time 300 -o "$dest.tmp" "$RELEASES/$latest/$CLAUDE_PLATFORM/claude" 2>/dev/null \
     || { rm -f "$dest.tmp"; return 0; }
 
-  # VERIFY against Anthropic's own published checksum before trusting the file.
+  # VERIFY the binary against the checksum from the signed manifest.
   local got
   got="$(sha256sum "$dest.tmp" 2>/dev/null | cut -d' ' -f1)"
   if [ "$got" != "$sum" ]; then log "checksum mismatch, discarding"; rm -f "$dest.tmp"; return 0; fi

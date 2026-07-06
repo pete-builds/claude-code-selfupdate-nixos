@@ -50,7 +50,7 @@
           pkgs = pkgsFor system;
           updater = pkgs.writeShellApplication {
             name = "claude-sources-update";
-            runtimeInputs = with pkgs; [ curl jq coreutils gnused ];
+            runtimeInputs = with pkgs; [ curl jq coreutils gnused gnupg ];
             text = builtins.readFile ./lib/update.sh;
           };
         in
