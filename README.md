@@ -4,6 +4,26 @@ Self-updating Claude Code for NixOS. It packages Anthropic's official native
 binary, pins it to Anthropic's own published sha256, and keeps it current by
 refreshing itself in the background when you run `claude`.
 
+One line: a Nix flake for Claude Code that keeps the official Anthropic binary
+current on NixOS without npm globals, third-party binary caches, or waiting on
+nixpkgs, while retaining a pinned reproducible fallback.
+
+## Who this is for (and who it isn't)
+
+This is a narrow, high-fit tool, not a mass-market one. It fits you if you:
+
+- Run NixOS and use Claude Code daily, and you're tired of packaging lag when a
+  new release fixes something.
+- Want Claude Code current without waiting on nixpkgs backports.
+- Dislike `curl | bash`, npm global installs, or trusting a third-party binary
+  cache, but still want a pinned reproducible fallback.
+- Build Claude Code into an actual NixOS dev/workstation config, not a one-off.
+
+It is probably **not** for you if you: don't use Nix; are happy with the
+nixpkgs cadence; or want a self-update model that is 100% purely declarative
+(the runtime updater is intentionally a pragmatic tradeoff, see
+[Caveats](#caveats)).
+
 ## Why
 
 Most ways of getting a fast-moving CLI onto NixOS ask you to trust something
@@ -118,6 +138,16 @@ curl -fsS https://downloads.claude.ai/claude-code-releases/<version>/manifest.js
 
 and compare against `data/sources.json`.
 
+**What this does not yet do.** Verification here is checksum integrity against
+the sha256 in Anthropic's `manifest.json`. It does **not** currently verify a
+cryptographic signature on the manifest itself. In other words, the trust anchor
+is your TLS connection to Anthropic's release host plus the published checksum,
+not a signature you can validate offline. That is meaningfully useful (a
+tampered or truncated download is rejected), but it is weaker than manifest
+signature verification. Adding manifest signature verification is the intended
+next step, and this section will make the stronger claim once it lands. Until
+then, do not read the checksum step as full supply-chain attestation.
+
 ## Prior art and credits
 
 This project stands on the shoulders of two existing flakes that also package
@@ -136,8 +166,30 @@ What is different here, without any knock on those projects:
    against Anthropic's own checksum and built locally, so you do not have to
    trust a third-party cache to get a fast install.
 
+### How it compares
+
+The table reflects each option's primary documented model. All of these ship
+Anthropic's official binary; the differences are in currency, trust, and
+reproducibility.
+
+| Option | Stays current without a flake update | No third-party cache required | No npm global | Reproducible pinned fallback |
+|---|:---:|:---:|:---:|:---:|
+| **This project** | Yes (self-update on launch) | Yes | Yes | Yes |
+| nixpkgs `claude-code` | No (waits on nixpkgs) | Yes | Yes | Yes |
+| sadjow/claude-code-nix | No (hourly CI + flake update) | No (recommends Cachix) | Yes | Yes |
+| ryoppippi/nix-claude-code | No (flake update) | No (uses a binary cache) | Yes | Yes |
+| npm global install | Yes (`npm install -g ...@latest`) | Yes | No | No |
+| official installer (`curl \| bash`) | Yes | Yes | Yes | No |
+
 ## Caveats
 
+- **Runtime self-update is a deliberate tradeoff.** Staging a verified newer
+  binary at runtime is, by design, less purely declarative than a pinned flake:
+  the exact binary you run can move between flake updates. This is opt-in and
+  reversible. Set `programs.claude-code.selfUpdate = false;` (or
+  `CLAUDE_SELFUPDATE=0`) and you get a fully pinned, reproducible build with no
+  runtime movement. Either way the pinned Nix build remains the fallback, so you
+  never end up worse off than the last-known-good version.
 - Four platforms are declared (`x86_64-linux`, `aarch64-linux`,
   `x86_64-darwin`, `aarch64-darwin`), but only `x86_64-linux` has been tested
   so far. The others should work; they are not yet verified.
