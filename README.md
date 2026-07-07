@@ -103,12 +103,14 @@ Two properties are worth calling out:
   sha256 that Anthropic publishes in its release `manifest.json`. The pinned
   build enforces this at Nix eval/build time; the self-updater enforces it
   again at download time. A mismatch means the download is discarded.
-- **Byte-identical run.** A self-updated download is run **unmodified**, that
-  is byte-for-byte identical to the file that was checksum-verified. On Linux
-  it is executed through Nix's dynamic loader with `--library-path` rather than
-  being patched with `patchelf`, so the verified bytes are never rewritten
-  before they run. (The pinned build does use `autoPatchelfHook`, because its
-  integrity is established at Nix build time rather than at run time.)
+- **Verify first, patch second.** A self-updated download is checksum-verified
+  **before** anything touches it. Only then does the launcher set its ELF
+  interpreter with `patchelf` (interpreter only, no RPATH), which is the same
+  operation `autoPatchelfHook` performs on the pinned build, so the binary can
+  be exec'd directly. Direct exec matters: launching through the dynamic
+  loader instead makes `process.execPath` point at `ld-linux` and breaks
+  Claude Code's own in-session `grep`/`rg` shell shims (see
+  [`docs/DESIGN.md`](docs/DESIGN.md)).
 
 You can re-verify any pinned version yourself:
 
@@ -141,9 +143,10 @@ What is different here, without any knock on those projects:
 - Four platforms are declared (`x86_64-linux`, `aarch64-linux`,
   `x86_64-darwin`, `aarch64-darwin`), but only `x86_64-linux` has been tested
   so far. The others should work; they are not yet verified.
-- A self-updated binary runs through Nix's dynamic loader on Linux (via
-  `--library-path`), not via `patchelf`. This is intentional (see
-  [`docs/DESIGN.md`](docs/DESIGN.md)) and keeps the verified bytes intact.
+- On Linux a self-updated binary gets its ELF interpreter patched (and nothing
+  else) after verification, then runs directly. Only `--set-interpreter` is
+  safe on this Bun single-file executable; adding an RPATH corrupts it (see
+  [`docs/DESIGN.md`](docs/DESIGN.md)).
 - The pinned Nix build is always the fallback. If any network or verification
   step fails, `claude` still runs the last-known-good pinned binary.
 

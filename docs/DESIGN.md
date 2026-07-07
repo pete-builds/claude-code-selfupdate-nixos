@@ -2,9 +2,9 @@
 
 This document explains why `claude-code-selfupdate-nixos` is built the way it
 is. The short version: NixOS makes in-place self-update awkward, Claude Code is
-a Bun single-file executable that does not survive `patchelf`, and we want a
-tool that stays current without asking the user to run `nix flake update`. The
-design threads all three.
+a Bun single-file executable that only survives a narrow `patchelf` operation,
+and we want a tool that stays current without asking the user to run
+`nix flake update`. The design threads all three.
 
 ## Why NixOS cannot self-update in place
 
@@ -27,38 +27,41 @@ verified download in a small state file and, on each launch, picks the best
 binary it has: the cached newer version if present and valid, otherwise the
 pinned store build.
 
-## Why we run the raw verified binary through the loader, not patchelf
+## Why we patch the interpreter (and only the interpreter) after verifying
 
-Claude Code ships as a **Bun single-file executable**. Bun packs the
-JavaScript payload and its metadata into a trailer appended to the end of the
-ELF file. The ELF header and program headers describe the code; the appended
-payload sits past them and is located by offsets baked into the file.
+Claude Code ships as a **Bun single-file executable**: the JavaScript payload
+rides in a trailer appended to the ELF file, located by offsets baked into the
+file. That makes it fragile under generic binary surgery. Two facts, both
+verified empirically against real releases:
 
-`patchelf` rewrites ELF headers in place to fix up the interpreter and RPATH.
-On an ordinary dynamically linked ELF that is fine. On a Bun single-file exe it
-is not: rewriting the headers **shifts** the file layout, the appended payload
-is no longer where the executable expects it, and the binary segfaults on
-startup. The pinned build works around this at Nix build time (it uses
-`autoPatchelfHook`, and it sets `dontStrip = true` so stripping cannot corrupt
-the trailer either), and that path is tested at build time.
+- `patchelf --set-interpreter` alone is safe. It is exactly what
+  `autoPatchelfHook` does to the pinned build at Nix build time (the binary's
+  `DT_NEEDED` is glibc-only, so no RPATH is ever added), and that path is
+  tested on every CI build.
+- `patchelf --set-rpath` is **not** safe: growing the RPATH shifts the file
+  layout, the Bun trailer is no longer where the executable expects it, and
+  the binary segfaults on startup (reproduced on 2.1.202). The launcher never
+  sets an RPATH, and `dontStrip = true` keeps `strip` away from the trailer.
 
-For a **self-updated** download we want a stronger guarantee: the bytes that
-run must be byte-for-byte identical to the bytes we checksum-verified against
-Anthropic's manifest. If we patched them, the checksum we verified would no
-longer describe the file on disk, and we would reintroduce exactly the
-corruption risk above.
+An earlier design avoided `patchelf` entirely and ran the raw verified file
+through Nix's dynamic loader (`ld-linux --library-path ... binary`). That kept
+the bytes pristine but broke Claude Code itself: when the loader is what the
+kernel execs, `/proc/self/exe` (Bun's `process.execPath`) points at
+**ld-linux**, and Claude Code exports `CLAUDE_CODE_EXECPATH=process.execPath`
+into every shell session it spawns. Its built-in `grep`/`rg` shell shims then
+`exec` the bare loader, and every `grep` inside a Claude Code session dies
+with `-G: error while loading shared libraries`. The binary must be the thing
+the kernel execs.
 
-So instead of patching, we run the raw file through Nix's dynamic loader
-explicitly:
-
-```sh
-"$CLAUDE_DYNAMIC_LINKER" --library-path "$CLAUDE_LIBRARY_PATH" "$binary" "$@"
-```
-
-The loader (`ld-linux`) and the library path are both provided by Nix, wired in
-by the wrapper. This satisfies the binary's dynamic linking needs without
-touching a single byte of the binary itself. The verified bytes run unmodified.
-On Darwin no loader indirection is needed, so the raw binary runs directly.
+So the order of operations is: download, verify the sha256 against Anthropic's
+manifest, **then** set the ELF interpreter on the verified file, smoke-test it,
+and stage it. Nothing is patched or executed before its checksum matches, and
+the patch itself is a deterministic, interpreter-only rewrite performed by
+Nix's own `patchelf` on the local machine. Cache entries staged by older
+launcher versions are migrated the same way at launch time (copy, patch,
+atomic rename, so running sessions keep their old inode), with the legacy
+loader launch kept as a last-resort fallback. On Darwin none of this is
+needed; the raw binary runs directly.
 
 ## The pinned-fallback safety model
 

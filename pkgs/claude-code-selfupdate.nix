@@ -12,13 +12,17 @@
   jq,
   coreutils,
   util-linux, # flock (Linux); wrapper degrades gracefully without it
+  patchelf, # (Linux) interpreter-patches verified downloads so they exec directly
 }:
 
 let
   isLinux = stdenvNoCC.hostPlatform.isLinux;
   ld = stdenv.cc.bintools.dynamicLinker;
-  # Raw downloads are run unmodified through this loader + library path (no patchelf,
-  # so the checksum-verified bytes are never rewritten).
+  # After checksum verification, a download gets ONLY its ELF interpreter set to
+  # `ld` (same as autoPatchelfHook does to the pinned build) and is exec'd
+  # directly. Running it through the loader instead would make process.execPath
+  # point at ld-linux and break Claude Code's in-session grep/rg shell shims.
+  # The library path is kept solely for the legacy loader fallback.
   libraryPath = lib.makeLibraryPath [
     stdenv.cc.cc.lib
     stdenv.cc.libc
@@ -44,7 +48,7 @@ stdenvNoCC.mkDerivation {
       --set CLAUDE_PINNED_VERSION ${claude-code.version} \
       --set CLAUDE_PLATFORM ${claude-code.passthru.platformKey} \
       --set CLAUDE_OS ${if isLinux then "linux" else "darwin"} \
-      ${lib.optionalString isLinux "--set CLAUDE_DYNAMIC_LINKER ${ld} --set CLAUDE_LIBRARY_PATH ${libraryPath}"} \
+      ${lib.optionalString isLinux "--set CLAUDE_DYNAMIC_LINKER ${ld} --set CLAUDE_LIBRARY_PATH ${libraryPath} --set CLAUDE_PATCHELF ${patchelf}/bin/patchelf"} \
       --prefix PATH : ${lib.makeBinPath runtimeBins}
     runHook postInstall
   '';
