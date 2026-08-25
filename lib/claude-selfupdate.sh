@@ -21,7 +21,12 @@
 #   CLAUDE_LIBRARY_PATH     (linux) --library-path for raw downloads
 #   CLAUDE_SIGNING_KEY      pinned Anthropic release public key (ASCII-armored)
 #   CLAUDE_SIGNING_FPR      expected primary-key fingerprint of that key
-#   CLAUDE_SELFUPDATE       0 disables the update check (just runs pinned)
+#   CLAUDE_SELFUPDATE       0 disables the background update CHECK. Note this
+#                           does NOT force the pinned build: a binary already
+#                           staged in the cache still wins, because the state
+#                           file is resolved before this flag is consulted. To
+#                           actually run pinned, clear the cache directory or set
+#                           programs.claude-code.selfUpdate = false.
 set -uo pipefail
 
 RELEASES="https://downloads.claude.ai/claude-code-releases"
@@ -123,8 +128,31 @@ selfupdate() {
   if [ "$got" != "$sum" ]; then log "checksum mismatch, discarding"; rm -f "$dest.tmp"; return 0; fi
   chmod +x "$dest.tmp"
 
-  # Only publish if the staged binary actually runs (through the loader on Linux).
-  if run_raw "$dest.tmp" --version >/dev/null 2>&1; then
+  # Only publish if the staged binary actually runs AND reports the version we
+  # asked for. Checking the exit status alone was not enough: an attacker who
+  # controls the release endpoint can claim "latest is 9999.0.0" and serve, at
+  # that path, a GENUINELY SIGNED older manifest and binary. Every check passed
+  # honestly, the machine recorded 9999.0.0, and because the launcher only ever
+  # moves to something numerically newer it was then pinned to the downgraded
+  # build permanently -- surviving `nix flake update`, and surviving
+  # CLAUDE_SELFUPDATE=0 too. No forgery required anywhere in that chain.
+  #
+  # The binary already tells us what it is; we were discarding the answer.
+  staged_version="$(run_raw "$dest.tmp" --version 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ -z "$staged_version" ]; then
+    log "staged binary failed smoke test (no version output), discarding"
+    rm -f "$dest.tmp"
+    return 0
+  fi
+  case "$staged_version" in
+    *"$latest"*) ;;
+    *)
+      log "staged binary reports '$staged_version' but we asked for '$latest'; refusing"
+      rm -f "$dest.tmp"
+      return 0
+      ;;
+  esac
+  if true; then
     mv -f "$dest.tmp" "$dest"
     printf '%s\t%s\n' "$latest" "$dest" >"$STATE"
     log "staged $latest for next launch"

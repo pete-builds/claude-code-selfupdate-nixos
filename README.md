@@ -117,7 +117,11 @@ The self-updating launcher is designed to never get in your way:
 4. The pinned Nix build is always the permanent fallback, so `claude` keeps
    working even if every network step fails.
 
-Disable self-update per run with `CLAUDE_SELFUPDATE=0`, or in the NixOS module
+Skip the background update check for one run with `CLAUDE_SELFUPDATE=0`. Be aware
+this does **not** force the pinned build: a newer binary already staged in the
+cache is still preferred, because the state file is resolved before that flag is
+read. To genuinely run the pinned build, remove
+`$XDG_CACHE_HOME/claude-code-selfupdate` or use the NixOS module
 with `programs.claude-code.selfUpdate = false;`.
 
 ## Trust and verification
