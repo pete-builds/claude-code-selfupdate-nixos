@@ -13,8 +13,14 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 SRC="$ROOT/data/sources.json"
 SIGNING_KEY="$ROOT/data/claude-code-signing-key.asc"
 SIGNING_FPR="31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
-# Anthropic publishes detached manifest signatures for releases >= this version.
-SIG_FLOOR="2.1.89"
+# NOTE: there used to be a SIG_FLOOR here, below which the signature check was
+# skipped ("predates signed manifests"). It is gone deliberately. The floor was
+# compared against the version string the network had just handed us, so the
+# attacker chose whether verification ran: answer "2.1.88" and the whole check
+# was skipped by design, and the resulting checksums were auto-committed and
+# pushed to a public repo by the hourly workflow. The pinned key is this
+# project's one differentiator, and that branch handed it back on request.
+# The pinned version is far above the old floor, so nothing legitimate needs it.
 
 latest="$(curl -fsS "$RELEASES/latest" | tr -d '[:space:]')"
 case "$latest" in
@@ -41,17 +47,15 @@ manifest_file="$(mktemp)"; sig_file="$(mktemp)"
 trap 'rm -f "$manifest_file" "$sig_file"' EXIT
 curl -fsS -o "$manifest_file" "$RELEASES/$latest/manifest.json"
 
-# Enforce the signature for every release Anthropic signs; fail closed on those.
-if [ "$(printf '%s\n%s\n' "$SIG_FLOOR" "$latest" | sort -V | head -1)" = "$SIG_FLOOR" ]; then
-  curl -fsS -o "$sig_file" "$RELEASES/$latest/manifest.json.sig"
-  if ! verify_sig "$manifest_file" "$sig_file"; then
-    echo "update: manifest signature verification FAILED for $latest, refusing to write sources.json" >&2
-    exit 1
-  fi
-  echo "update: manifest signature verified for $latest" >&2
-else
-  echo "update: $latest predates signed manifests ($SIG_FLOOR); checksum-only" >&2
+# Signature verification is unconditional and fails closed. No version-derived
+# escape hatch: the version comes from the network, so any such hatch is the
+# attacker's to open.
+curl -fsS -o "$sig_file" "$RELEASES/$latest/manifest.json.sig"
+if ! verify_sig "$manifest_file" "$sig_file"; then
+  echo "update: manifest signature verification FAILED for $latest, refusing to write sources.json" >&2
+  exit 1
 fi
+echo "update: manifest signature verified for $latest" >&2
 
 manifest="$(cat "$manifest_file")"
 
