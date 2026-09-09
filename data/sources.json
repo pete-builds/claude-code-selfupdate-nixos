@@ -1,14 +1,14 @@
 {
-  "version": "2.1.265",
+  "version": "2.1.266",
   "_comment": "Anthropic's own published sha256 checksums, transcribed verbatim from https://downloads.claude.ai/claude-code-releases/<version>/manifest.json. Regenerate with lib/update.sh.",
   "platforms": {
-    "darwin-arm64": "164b09eb800dedb9bb06304129fbf07743ab9db972ae07333ef4f18cde0cb8d5",
-    "darwin-x64": "42c267a37f3db40af9e453a315edf91d423cb96ad147353e2c187769931b1af8",
-    "linux-arm64": "fc1f75b115d6a398f6437df0e00142b073c23633b040618758a935f634427c88",
-    "linux-x64": "e14738e3a58d1fc6ccc23b9c919451b4846bc27074a3fb48db976a7d595bdeeb",
-    "linux-arm64-musl": "2ca881fe49749e616d579be1f7260bfe3f8d9195f0b8517d24c0be5476581c7a",
-    "linux-x64-musl": "77b792470cd157517fbeedb349f31c8f9c40adb3aa0f21ef6086f54b007a2223",
-    "win32-x64": "b3d39d4a7e63629e4675a72066eec5e7334225ac1a28432e6f4325b72782631d",
-    "win32-arm64": "ad007cd51d4be86138e22f5c5528c433ef843c2e1aa5ec35c51a486064b0ca5d"
+    "darwin-arm64": "553d1b9e9e7068b275c0a783c7e139ff6503096f286e674c8c919379fb0eca62",
+    "darwin-x64": "e8010163be47e29681e768946865130482e82bb47b2c5e7d0f217bacd25b526d",
+    "linux-arm64": "6e44c5d3c97efaa1ee35ab8dd875a907681707e5cc4f6ca0da3d13a917bbcedb",
+    "linux-x64": "19842705e989393fce936804df6d2ab034860e24b8f8880357981d87ffd83fac",
+    "linux-arm64-musl": "7736377f052bffce3113570dc80a9fa1661f911fb0f6730e3b3b550db1991f10",
+    "linux-x64-musl": "1b92f53d2380955bf43cf50c261f88ae69e865b620e214be217cb346d0faaff1",
+    "win32-x64": "d2c5f7b3b6a12819097ceb6efbce2a390157166003fcaee32dbde0e6d7b45ef7",
+    "win32-arm64": "ca711c1637af25d5ab517bc499603355fdaccf3884728228960aaeab3f601294"
   }
 }
