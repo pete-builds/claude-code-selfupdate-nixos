@@ -60,6 +60,24 @@ by the wrapper. This satisfies the binary's dynamic linking needs without
 touching a single byte of the binary itself. The verified bytes run unmodified.
 On Darwin no loader indirection is needed, so the raw binary runs directly.
 
+### Direct execution when the host can load the binary
+
+Starting the binary through the loader has one visible side effect: the
+process's exec path (`/proc/self/exe`, `process.execPath`) is the loader, not
+the binary. Claude Code re-launches itself by that path. `claude remote-control`
+spawns every session it serves as `<execPath> --print ...`, so under the loader
+each spawned session dies at once with
+`ld-linux-x86-64.so.2: unrecognized option '--print'`.
+
+The launcher therefore prefers to `exec` the raw download directly whenever the
+host provides the interpreter path baked into Anthropic's binary
+(`/lib64/ld-linux-x86-64.so.2` on x86_64, `/lib/ld-linux-aarch64.so.1` on
+aarch64): NixOS with `programs.nix-ld`, or any FHS distribution. The binary
+needs only glibc (`libc`, `libm`, `libdl`, `libpthread`, `librt`), which every
+such host can provide. The bytes that run are still the verified file,
+untouched; only the way the kernel starts it changes. Hosts without that path
+keep the explicit loader. `CLAUDE_RAW_EXEC=direct` or `=loader` forces either.
+
 ## The pinned-fallback safety model
 
 Every risky step degrades to the pinned build:

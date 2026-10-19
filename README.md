@@ -144,11 +144,15 @@ Three properties are worth calling out:
   build enforces this at Nix eval/build time; the self-updater enforces it
   again at download time. A mismatch means the download is discarded.
 - **Byte-identical run.** A self-updated download is run **unmodified**, that
-  is byte-for-byte identical to the file that was checksum-verified. On Linux
-  it is executed through Nix's dynamic loader with `--library-path` rather than
-  being patched with `patchelf`, so the verified bytes are never rewritten
-  before they run. (The pinned build does use `autoPatchelfHook`, because its
-  integrity is established at Nix build time rather than at run time.)
+  is byte-for-byte identical to the file that was checksum-verified. It is
+  never patched with `patchelf`, so the verified bytes are never rewritten
+  before they run. On a Linux host that provides the interpreter path baked
+  into Anthropic's binary (`/lib64/ld-linux-x86-64.so.2`: NixOS with
+  `programs.nix-ld`, or any FHS distribution) it is executed directly; on
+  any other Linux host it is executed through Nix's dynamic loader with
+  `--library-path`. `CLAUDE_RAW_EXEC=direct|loader` forces one or the other.
+  (The pinned build does use `autoPatchelfHook`, because its integrity is
+  established at Nix build time rather than at run time.)
 
 You can re-verify any pinned version yourself, end to end, with Anthropic's own
 key:
@@ -228,9 +232,12 @@ reproducibility.
 - Four platforms are declared (`x86_64-linux`, `aarch64-linux`,
   `x86_64-darwin`, `aarch64-darwin`), but only `x86_64-linux` has been tested
   so far. The others should work; they are not yet verified.
-- A self-updated binary runs through Nix's dynamic loader on Linux (via
-  `--library-path`), not via `patchelf`. This is intentional (see
-  [`docs/DESIGN.md`](docs/DESIGN.md)) and keeps the verified bytes intact.
+- A self-updated binary is never patched with `patchelf`. On Linux it runs
+  directly when the host has `/lib64/ld-linux-x86-64.so.2` (`programs.nix-ld`
+  on NixOS), and through Nix's dynamic loader (via `--library-path`) otherwise.
+  This is intentional (see [`docs/DESIGN.md`](docs/DESIGN.md)) and keeps the
+  verified bytes intact. Direct is preferred because `claude remote-control`
+  re-launches the binary by its own exec path, which must not be the loader.
 - The pinned Nix build is always the fallback. If any network or verification
   step fails, `claude` still runs the last-known-good pinned binary.
 

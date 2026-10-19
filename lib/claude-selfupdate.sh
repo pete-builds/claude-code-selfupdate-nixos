@@ -19,6 +19,11 @@
 #   CLAUDE_OS               linux | darwin
 #   CLAUDE_DYNAMIC_LINKER   (linux) ELF interpreter used to run raw downloads
 #   CLAUDE_LIBRARY_PATH     (linux) --library-path for raw downloads
+#   CLAUDE_RAW_EXEC         (linux) auto (default) | direct | loader. How a raw
+#                           download is started: direct when the host provides
+#                           the binary's own interpreter path (NixOS with
+#                           programs.nix-ld, or any FHS distribution), the
+#                           loader otherwise. See run_raw below.
 #   CLAUDE_SIGNING_KEY      pinned Anthropic release public key (ASCII-armored)
 #   CLAUDE_SIGNING_FPR      expected primary-key fingerprint of that key
 #   CLAUDE_SELFUPDATE       0 disables the background update CHECK. Note this
@@ -61,12 +66,38 @@ verify_sig() { # verify_sig <signed-file> <detached-sig>
   return 0
 }
 
-# Raw downloads (not Nix-patched) run through the loader on Linux; native elsewhere.
+# Raw downloads (not Nix-patched) are started directly when the host can load
+# them, through the loader otherwise; native on darwin.
+#
+# Direct wins whenever it is possible: a binary that is the kernel's own exec
+# target sees itself as its exec path (process.execPath), which Claude Code
+# relies on to re-launch itself. `claude remote-control` spawns its sessions
+# as `<execPath> --print ...`; started through the loader, execPath is the
+# loader and every spawned session dies with
+# "ld-linux-x86-64.so.2: unrecognized option '--print'". The bytes that run
+# are the same verified file either way.
+host_interp() { # the interpreter path baked into Anthropic's Linux binaries
+  case "$CLAUDE_PLATFORM" in
+    linux-x64) printf '%s\n' /lib64/ld-linux-x86-64.so.2 ;;
+    linux-arm64) printf '%s\n' /lib/ld-linux-aarch64.so.1 ;;
+    *) printf '\n' ;;
+  esac
+}
+raw_direct() { # true when a raw download can be exec'd directly on this host
+  [ "$CLAUDE_OS" = "linux" ] || return 0
+  case "${CLAUDE_RAW_EXEC:-auto}" in
+    direct) return 0 ;;
+    loader) return 1 ;;
+  esac
+  local interp
+  interp="$(host_interp)"
+  [ -n "$interp" ] && [ -e "$interp" ]
+}
 run_raw() {
-  if [ "$CLAUDE_OS" = "linux" ]; then
-    "$CLAUDE_DYNAMIC_LINKER" --library-path "$CLAUDE_LIBRARY_PATH" "$@"
-  else
+  if raw_direct; then
     "$@"
+  else
+    "$CLAUDE_DYNAMIC_LINKER" --library-path "$CLAUDE_LIBRARY_PATH" "$@"
   fi
 }
 
@@ -166,7 +197,7 @@ if [ "${CLAUDE_SELFUPDATE:-1}" = "1" ]; then
   ( selfupdate >/dev/null 2>&1 & ) 2>/dev/null
 fi
 
-if [ "$best_raw" = "1" ] && [ "$CLAUDE_OS" = "linux" ]; then
+if [ "$best_raw" = "1" ] && ! raw_direct; then
   exec "$CLAUDE_DYNAMIC_LINKER" --library-path "$CLAUDE_LIBRARY_PATH" "$best_bin" "$@"
 fi
 exec "$best_bin" "$@"
